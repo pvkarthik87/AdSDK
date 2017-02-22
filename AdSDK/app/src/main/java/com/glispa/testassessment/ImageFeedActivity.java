@@ -21,7 +21,7 @@ public class ImageFeedActivity extends AppCompatActivity {
         ListView listView = (ListView) findViewById(R.id.content_list);
         ContentGenerator.fillWithRandom(contentList, 100);
         adapter = new FeedAdapter(contentList);
-        ImageAdAdapter adAdapter = new ImageAdAdapter().setAdapter(adapter).setAdInterval(5);
+        ImageAdAdapter adAdapter = new ImageAdAdapter().setAdapter(adapter).setAdInterval(10).setAdStartPosition(10);
         listView.setAdapter(adAdapter);
     }
 }

@@ -3,6 +3,7 @@ package com.glispa.adsdk.banner.adapters;
 import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -11,35 +12,26 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import com.bumptech.glide.Glide;
 import com.glispa.adsdk.R;
 import com.glispa.adsdk.banner.BaseAd;
 import com.glispa.adsdk.banner.NativeAd;
 import com.glispa.adsdk.network.RequestManager;
-import com.squareup.picasso.Picasso;
+import com.glispa.adsdk.utils.AdHelper;
+import com.glispa.adsdk.utils.GlideUtils;
 
 import java.util.HashMap;
 
 /**
  * NativeAdAdapter should adding native ads{@link com.glispa.adsdk.banner.NativeAd} inside of original adapter.
  */
-public class NativeAdAdapter extends AdAdapter {
+public class NativeAdAdapter extends AdAdapter implements AdHelper.AdListener {
+
+    private static final String TAG = NativeAdAdapter.class.getSimpleName();
 
     public NativeAdAdapter() {
         requestManager = new RequestManager(RequestManager.RequestType.Native);
-        if (loadedAds.isEmpty()) {
-            Thread thread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    NativeAd ad = (NativeAd) requestManager.getAd();
-                    if (ad == null) {
-                        return;
-                    }
-                    loadedAds.add(ad);
-                    original.notifyDataSetChanged();
-                }
-            });
-            thread.start();
-        }
+        mAdHelper = new AdHelper(requestManager, this);
     }
 
     /**
@@ -68,9 +60,20 @@ public class NativeAdAdapter extends AdAdapter {
         return this;
     }
 
+    /**
+     * setUp Ad Starting Position
+     *
+     * @param position should be > 0
+     * @return same adapter
+     */
+    public NativeAdAdapter setAdStartPosition(int position) {
+        this.startPos = position;
+        return this;
+    }
+
     @Override
     public int getCount() {
-        return original.getCount() + adPositions.size();
+        return ((original != null)?original.getCount():0) + adPositions.size();
     }
 
     @Override
@@ -87,51 +90,9 @@ public class NativeAdAdapter extends AdAdapter {
         return 0;
     }
 
-    /**
-     * getView should return ad view if current position is ad position.
-     * If there is no loaded ad to add into the listView,
-     * the new thread will be started to load new ad
-     */
     @Override
-    public View getView(int position, View convertView, final ViewGroup parent) {
-        if (isAdPosition(position)) {
-            if (adPositions.containsKey(position)) {
-                return getAdView(adPositions.get(position), parent);
-            } else {
-                if (loadedAds.isEmpty()) {
-                    Thread thread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (requestManager != null) {
-                                NativeAd ad = (NativeAd) requestManager.getAd();
-                                if (ad == null) {
-                                    return;
-                                }
-                                loadedAds.add(ad);
-                                if (parent != null) {
-                                    parent.post(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            notifyDataSetChanged();
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    });
-                    thread.start();
-                } else {
-                    NativeAd ad = (NativeAd) loadedAds.remove(0);
-                    adPositions.put(position, ad);
-                    return getAdView(ad, parent);
-                }
-            }
-        }
-        return original.getView(getOriginalPosition(position), convertView, parent);
-    }
-
-    private boolean isAdPosition(int position) {
-        return position % interval == 0;
+    public int getViewTypeCount() {
+        return 1 + ((original != null)?original.getViewTypeCount():0);
     }
 
     @Override
@@ -139,7 +100,7 @@ public class NativeAdAdapter extends AdAdapter {
         if (adPositions.containsKey(position)) {
             return original.getViewTypeCount();
         }
-        return original.getItemViewType(getOriginalPosition(position));
+        return (original != null)?original.getItemViewType(getOriginalPosition(position)):0;
     }
 
     /**
@@ -149,19 +110,35 @@ public class NativeAdAdapter extends AdAdapter {
      * @param parent
      * @return ad view
      */
-    public View getAdView(BaseAd baseAd, View parent) {
+    public View getAdView(BaseAd baseAd, View convertView, ViewGroup parent) {
+        if(convertView == null) {
+            // recycled view not available so inflate new view
+            final Context context = parent.getContext();
+            LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            convertView = inflater.inflate(R.layout.ad_view, parent, false);
+            NativeAdViewHolder nativeAdViewHolder = getHolder(convertView);
+            convertView.setTag(nativeAdViewHolder);
+        }
+        NativeAdViewHolder nativeAdViewHolder = (NativeAdViewHolder) convertView.getTag();
+        fillNativeAdDetails(parent, nativeAdViewHolder, (NativeAd) baseAd);
+        return convertView;
+    }
+
+	/**
+     *
+     * fills view with Native Ad details
+     *
+     * @param parent
+     * @param nativeAdViewHolder
+     * @param ad
+     */
+    private void fillNativeAdDetails(ViewGroup parent, NativeAdViewHolder nativeAdViewHolder, final NativeAd ad) {
+        nativeAdViewHolder.title.setText(ad.getTitle());
+        nativeAdViewHolder.description.setText(ad.getDescription());
+        Glide.clear(nativeAdViewHolder.image);
+        GlideUtils.loadImage(parent.getContext(), ad.getImageUrl(), nativeAdViewHolder.image);
         final Context context = parent.getContext();
-        final NativeAd ad = (NativeAd) baseAd;
-        LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-        View adView = inflater.inflate(R.layout.ad_view, (ViewGroup) parent, false);
-        TextView title = (TextView) adView.findViewById(R.id.title);
-        TextView description = (TextView) adView.findViewById(R.id.description);
-        Button callToAction = (Button) adView.findViewById(R.id.button);
-        ImageView image = (ImageView) adView.findViewById(R.id.image);
-        title.setText(ad.getTitle());
-        description.setText(ad.getDescription());
-        Picasso.with(parent.getContext()).load(ad.getImageUrl()).into(image);
-        callToAction.setOnClickListener(new View.OnClickListener() {
+        nativeAdViewHolder.callToAction.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
                 Uri uri = Uri.parse(ad.getCallToActionUrl());
@@ -170,21 +147,34 @@ public class NativeAdAdapter extends AdAdapter {
                 context.startActivity(intent);
             }
         });
-        return adView;
     }
 
-    private int getOriginalPosition(int position) {
-        int originalPosition = position - getAdCountPlacedBefore(position);
-        return originalPosition > 0 ? originalPosition : 0;
+    private NativeAdViewHolder getHolder(View v) {
+        NativeAdViewHolder holder = new NativeAdViewHolder();
+        holder.title = (TextView) v.findViewById(R.id.title);
+        holder.description = (TextView) v.findViewById(R.id.description);
+        holder.image = (ImageView) v.findViewById(R.id.image);
+        holder.callToAction = (Button) v.findViewById(R.id.button);
+        return holder;
     }
 
-    private int getAdCountPlacedBefore(int position) {
-        int count = 0;
-        for (int i : adPositions.keySet()) {
-            if (i < position) {
-                count++;
-            }
-        }
-        return count;
+    // For caching views
+    private static class NativeAdViewHolder {
+        TextView title;
+        TextView description;
+        Button callToAction;
+        ImageView image;
+    }
+
+    @Override
+    public void onAdRequestFailed(int adPos) {
+        Log.d(TAG, "Failed to load for position" + adPos);
+    }
+
+    @Override
+    public void onAdRequestSuccess(int adPos, BaseAd baseAd) {
+        Log.d(TAG, "Loaded ad for position" + adPos);
+        adPositions.put(adPos, baseAd);
+        notifyDataSetChanged();
     }
 }

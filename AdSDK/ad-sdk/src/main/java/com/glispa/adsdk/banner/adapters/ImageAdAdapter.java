@@ -1,6 +1,7 @@
 package com.glispa.adsdk.banner.adapters;
 
 import android.content.Context;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -8,35 +9,26 @@ import android.widget.BaseAdapter;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import com.bumptech.glide.Glide;
 import com.glispa.adsdk.R;
 import com.glispa.adsdk.banner.BaseAd;
 import com.glispa.adsdk.banner.ImageAd;
 import com.glispa.adsdk.network.RequestManager;
-import com.squareup.picasso.Picasso;
+import com.glispa.adsdk.utils.AdHelper;
+import com.glispa.adsdk.utils.GlideUtils;
 
 import java.util.HashMap;
 
 /**
  * NativeAdAdapter should adding native ads{@link com.glispa.adsdk.banner.ImageAd} inside of original adapter.
  */
-public class ImageAdAdapter extends AdAdapter {
+public class ImageAdAdapter extends AdAdapter implements AdHelper.AdListener {
+
+    private static final String TAG = ImageAdAdapter.class.getSimpleName();
 
     public ImageAdAdapter() {
         requestManager = new RequestManager(RequestManager.RequestType.Image);
-        if (loadedAds.isEmpty()) {
-            Thread thread = new Thread(new Runnable() {
-                @Override
-                public void run() {
-                    ImageAd ad = (ImageAd) requestManager.getAd();
-                    if (ad == null) {
-                        return;
-                    }
-                    loadedAds.add(ad);
-                    original.notifyDataSetChanged();
-                }
-            });
-            thread.start();
-        }
+        mAdHelper = new AdHelper(requestManager, this);
     }
 
     @Override
@@ -56,60 +48,6 @@ public class ImageAdAdapter extends AdAdapter {
     @Override
     public long getItemId(int i) {
         return 0;
-    }
-
-    /**
-     * getView should return ad view if current position is ad position.
-     * If there is no loaded ad to add into the listView,
-     * the new thread will be started to load new ad
-     */
-    @Override
-    public View getView(int position, View convertView, final ViewGroup parent) {
-        if (position % interval == 0) {
-            if (adPositions.containsKey(position)) {
-                return getAdView(adPositions.get(position), parent);
-            } else {
-                if (loadedAds.isEmpty()) {
-                    Thread thread = new Thread(new Runnable() {
-                        @Override
-                        public void run() {
-                            if (requestManager != null) {
-                                ImageAd ad = (ImageAd) requestManager.getAd();
-                                if (ad == null) {
-                                    return;
-                                }
-                                loadedAds.add(ad);
-                                if (parent != null) {
-                                    parent.post(new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            notifyDataSetChanged();
-                                        }
-                                    });
-                                }
-                            }
-                        }
-                    });
-                    thread.start();
-                } else {
-                    ImageAd ad = (ImageAd) loadedAds.remove(0);
-                    adPositions.put(position, ad);
-                    return getAdView(ad, parent);
-                }
-            }
-        }
-
-        Integer count = 0;
-        for (int i : adPositions.keySet()) {
-            if (i < position) {
-                count++;
-            }
-        }
-        Integer pos = position - count;
-        if (pos < 0) {
-            pos = 0;
-        }
-        return original.getView(pos, convertView, parent);
     }
 
     /**
@@ -133,11 +71,21 @@ public class ImageAdAdapter extends AdAdapter {
     public ImageAdAdapter setAdInterval(int interval) {
         this.interval = interval;
         if (interval > 0) {
-            adPositions = new HashMap<>(original.getCount() / interval + 1);
+            adPositions = new HashMap<>(8);
         }
         return this;
     }
 
+    /**
+     * setUp Ad Starting Position
+     *
+     * @param position should be > 0
+     * @return same adapter
+     */
+    public ImageAdAdapter setAdStartPosition(int position) {
+        this.startPos = position;
+        return this;
+    }
 
     /**
      * creates view representation of an ad
@@ -147,17 +95,64 @@ public class ImageAdAdapter extends AdAdapter {
      * @return ad view
      */
     @Override
-    View getAdView(BaseAd baseAd, View parent) {
-        final Context context = parent.getContext();
-        final ImageAd ad = (ImageAd) baseAd;
-        LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
-        View adView = inflater.inflate(R.layout.ad_view, (ViewGroup) parent, false);
-        TextView title = (TextView) adView.findViewById(R.id.title);
-        TextView description = (TextView) adView.findViewById(R.id.description);
-        ImageView image = (ImageView) adView.findViewById(R.id.image);
-        title.setText(ad.getTitle());
-        description.setText(ad.getDescription());
-        Picasso.with(parent.getContext()).load(ad.getImageUrl()).into(image);
-        return adView;
+    View getAdView(BaseAd baseAd, View convertView, ViewGroup parent) {
+        if(convertView == null) {
+            // recycled view not available so inflate new view
+            final Context context = parent.getContext();
+            LayoutInflater inflater = (LayoutInflater) context.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+            convertView = inflater.inflate(R.layout.ad_view, parent, false);
+            ImageAdViewHolder imageAdViewHolder = getHolder(convertView);
+            convertView.setTag(imageAdViewHolder);
+        }
+        ImageAdViewHolder imageAdViewHolder = (ImageAdViewHolder) convertView.getTag();
+        fillImageAdDetails(parent, imageAdViewHolder, (ImageAd) baseAd);
+        return convertView;
+    }
+
+    @Override
+    public int getViewTypeCount() {
+        return 1 + ((original != null)?original.getViewTypeCount():0);
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        if (adPositions.containsKey(position)) {
+            return original.getViewTypeCount();
+        }
+        return original.getItemViewType(getOriginalPosition(position));
+    }
+
+    private void fillImageAdDetails(ViewGroup parent, ImageAdViewHolder imageAdViewHolder, ImageAd ad) {
+        imageAdViewHolder.title.setText(ad.getTitle());
+        imageAdViewHolder.description.setText(ad.getDescription());
+        Glide.clear(imageAdViewHolder.image);
+        GlideUtils.loadImage(parent.getContext(), ad.getImageUrl(), imageAdViewHolder.image);
+    }
+
+    private ImageAdViewHolder getHolder(View v) {
+        ImageAdViewHolder holder = new ImageAdViewHolder();
+        holder.title = (TextView) v.findViewById(R.id.title);
+        holder.description = (TextView) v.findViewById(R.id.description);
+        holder.image = (ImageView) v.findViewById(R.id.image);
+        return holder;
+    }
+
+    // For caching views
+    private static class ImageAdViewHolder {
+        TextView title;
+        TextView description;
+        ImageView image;
+    }
+
+    @Override
+    public void onAdRequestFailed(int adPos) {
+        Log.d(TAG, "Failed to load for position" + adPos);
+    }
+
+    @Override
+    public void onAdRequestSuccess(int adPos, BaseAd baseAd) {
+        Log.d(TAG, "Loaded ad for position" + adPos);
+        adPositions.put(adPos, baseAd);
+        notifyDataSetChanged();
     }
 }
