@@ -1,0 +1,8 @@
+{
+  "id": "%1$s",
+  "title": "Ampiri Native Ad",
+  "imageUrl": "https://test-assets.cdn.ampiri.com/native/ampiri_horizontal.jpg",
+  "description": "Native ad",
+  "callToActionText": "Get Started",
+  "callToActionUrl": "https://github.com/ampiri"
+}
